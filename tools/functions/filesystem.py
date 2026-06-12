@@ -18,6 +18,15 @@ def _is_safe_path(target_path: str | Path) -> bool:
     except Exception:
         return False
 
+IGNORED_DIRS = {".git", ".venv", "__pycache__", "node_modules", ".DS_Store"}
+
+def _should_ignore(path: Path) -> bool:
+    """Helper to check if a path contains ignored directories like .venv, .git, etc."""
+    for part in path.parts:
+        if part in IGNORED_DIRS:
+            return True
+    return False
+
 
 @register_tool
 def read_file(path: str, offset: int = 1, limit: int = 200, raw: bool = True) -> str:
@@ -142,8 +151,8 @@ def file_glob(pattern: str, path: str = '.') -> list[str]:
     try:
         for p in path_resolved.glob(pattern):
             p_resolved = p.resolve()
-            # Ensure safety check for the actual matched path
-            if _is_safe_path(p_resolved):
+            # Ensure safety check for the actual matched path and exclude ignored dirs
+            if _is_safe_path(p_resolved) and not _should_ignore(p_resolved):
                 if p_resolved.is_file() or p_resolved.is_dir():
                     results.append(str(p_resolved))
 
@@ -178,7 +187,7 @@ def grep_file(search_term: str, target_path: str) -> list[dict[str, Any]] | str:
     elif p.is_dir():
         try:
             for filepath in p.rglob("*"):
-                if filepath.is_file() and _is_safe_path(filepath):
+                if filepath.is_file() and _is_safe_path(filepath) and not _should_ignore(filepath):
                     files_to_search.append(filepath)
         except Exception as e:
             return f"Error listing directory: {e}"

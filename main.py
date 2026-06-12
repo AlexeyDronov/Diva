@@ -1,37 +1,55 @@
 from openai import OpenAI
 from openai.types.chat import ChatCompletionAssistantMessageParam, ChatCompletionMessageParam, ChatCompletionMessageToolCallParam
 
+from prompt_toolkit import PromptSession
+from prompt_toolkit.styles import Style
+
+from rich.console import Console
+from rich.live import Live
+from rich.markdown import Markdown
+from rich.panel import Panel
+from rich.status import Status
+
 from tools.tool_handler import handle_tool_calls
 from tools.registry import TOOL_SCHEMAS
 from config import get_llm_client, unload_model, read_system_prompt
 
+console = Console()
+prompt_style = Style.from_dict({
+    'prompt': 'bold #00ff87'
+})
 
 def agent_loop(
         client: OpenAI, 
-        model_name: str, 
-        system_prompt: str = "", 
-        max_text_turns: int = 5
+        model_name: str,
+        thinking_enabled: bool = True,
+        system_prompt: str = ""
 ) -> None:
     messages: list[ChatCompletionMessageParam] = []
     messages.append({"role": "system", "content": system_prompt})
 
+    input_session = PromptSession(style=prompt_style)
+    console.print("Hey! Welcome to [bold green]Diva![/bold green] Type [bold red]/bye[/bold red] to exit.\n")
+
     while True:
         try:
-            user_input = input("User: ")
+            user_input = input_session.prompt([('class:prompt', '❯ ')])
+            if not user_input.strip():
+                continue
             if user_input.lower() == "/bye":
-                unload_model(model_name)
-                break
-            print()
+                with Status("[red]Unloading model...[/red]", spinner="bouncingBar"):
+                    unload_model(model_name)
+                    break
 
             messages.append({"role": "user", "content": user_input})
-            consecutive_text_turns = 0
 
             while True:
                 streaming_response = client.chat.completions.create(
                     model=model_name,
                     messages=messages,
                     tools=TOOL_SCHEMAS,
-                    stream=True
+                    stream=True,
+                    extra_body={"think": thinking_enabled}
                 )
 
                 # Initialize the current assistant message structure to hold streaming updates and tool calls
@@ -45,33 +63,35 @@ def agent_loop(
                 tool_calls: dict[int, ChatCompletionMessageToolCallParam] = {}
                 content = ""
 
-                for chunk in streaming_response:
-                    if not chunk.choices:
-                        continue
+                # Stream the content and render it as Markdown in real-time
+                with Live(Markdown(""), auto_refresh=False, console=console) as live:
+                    for chunk in streaming_response:
+                        if not chunk.choices:
+                            continue
 
-                    delta = chunk.choices[0].delta
-                    
-                    if delta.content:
-                        content += delta.content
-                        print(delta.content, end="", flush=True)
+                        delta = chunk.choices[0].delta
+                        
+                        if delta.content:
+                            content += delta.content
+                            live.update(Markdown(content), refresh=True)
 
-                    if delta.tool_calls:
-                        for tool_call in delta.tool_calls:
-                            idx = tool_call.index
-                            if idx not in tool_calls:
-                                tool_calls[idx] = {
-                                    "id": "",
-                                    "type": "function",
-                                    "function": {"name": "", "arguments": ""}
-                                }
-                            entry = tool_calls[idx]
-                            if tool_call.id:
-                                entry["id"] = tool_call.id
-                            if tool_call.function:
-                                if tool_call.function.name:
-                                    entry["function"]["name"] += tool_call.function.name
-                                if tool_call.function.arguments:
-                                    entry["function"]["arguments"] += tool_call.function.arguments
+                        if delta.tool_calls:
+                            for tool_call in delta.tool_calls:
+                                idx = tool_call.index
+                                if idx not in tool_calls:
+                                    tool_calls[idx] = {
+                                        "id": "",
+                                        "type": "function",
+                                        "function": {"name": "", "arguments": ""}
+                                    }
+                                entry = tool_calls[idx]
+                                if tool_call.id:
+                                    entry["id"] = tool_call.id
+                                if tool_call.function:
+                                    if tool_call.function.name:
+                                        entry["function"]["name"] += tool_call.function.name
+                                    if tool_call.function.arguments:
+                                        entry["function"]["arguments"] += tool_call.function.arguments
                 
                 # Aggregate the content and tool calls from the stream
                 assistant_message["content"] = content
@@ -79,23 +99,19 @@ def agent_loop(
                     tool_calls[i] for i in sorted(tool_calls)
                 ]
                 
-                if not tool_calls:
-                    consecutive_text_turns += 1
-                    if consecutive_text_turns >= max_text_turns:
-                        print("\n[SYSTEM] Agent did not signal completion. Breaking.")
-                        break
-                
-                # Reset counter when a tool is invoked
-                consecutive_text_turns = 0
-
-                if any(tc["function"]["name"] == "stop_response" for tc in assistant_message["tool_calls"]):
-                    break
-                
+                # Append the assistant's response to conversation history
                 messages.append(assistant_message)
 
-                # Check if tools were requested before finishing the message structure
+                if not assistant_message["tool_calls"]:
+                    break
+
+                # Execute requested tools and append responses to the conversation
                 tool_response = handle_tool_calls(assistant_message["tool_calls"])
                 messages.extend(tool_response)
+
+                # Break the loop if the model signaled stop_response
+                if any(tc["function"]["name"] == "stop_response" for tc in assistant_message["tool_calls"]):
+                    break
 
         except KeyboardInterrupt:
             break
