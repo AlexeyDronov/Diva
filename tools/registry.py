@@ -3,10 +3,11 @@ from collections.abc import Callable
 from typing import Any
 import re
 
+from openai.types.chat import ChatCompletionToolParam
 from pydantic import create_model, Field
 
 TOOL_REGISTRY: dict[str, Callable] = {}
-TOOL_SCHEMAS: list[dict[str, Any]] = []
+TOOL_SCHEMAS: list[ChatCompletionToolParam] = []
 
 def _parse_docstring_args(docstring: str | None) -> dict[str, str]:
     """Parses a docstring to extract argument descriptions."""
@@ -93,7 +94,7 @@ def register_tool(func: Callable) -> Callable:
     if indices:
         clean_desc = clean_desc[:min(indices)].strip()
 
-    openai_schema = {
+    openai_schema: ChatCompletionToolParam = {
         "type": "function",
         "function": {
             "name": name,

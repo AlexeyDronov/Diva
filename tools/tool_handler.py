@@ -1,16 +1,17 @@
 import json
 from typing import Any
+
+from openai.types.chat import ChatCompletionMessageToolCallParam, ChatCompletionToolMessageParam
 from tools.registry import TOOL_REGISTRY
 
 def handle_tool_calls(
-        tool_calls
-):
-    tool_responses: list[dict[str, str]] = []
-    completion_flag = False
+        tool_calls: list[ChatCompletionMessageToolCallParam]
+) -> list[ChatCompletionToolMessageParam]:
+    tool_responses: list[ChatCompletionToolMessageParam] = []
 
     for tool_call in tool_calls:
-        name = tool_call.function.name
-        args = json.loads(tool_call.function.arguments)
+        name = tool_call["function"]["name"]
+        args = json.loads(tool_call["function"]["arguments"])
 
         print(f"    [tool] {name}({args})")
 
@@ -22,14 +23,11 @@ def handle_tool_calls(
         print(f"    [tool results] {result[:200]}{'...' if len(result) > 200 else result}")
         tool_responses.append({
             "role": "tool",
-            "tool_call_id": tool_call.id,
+            "tool_call_id": tool_call["id"],
             "content": _serialise_answers(result)
         })
 
-        if name == "stop_response":
-            completion_flag = True
-            break
-    return tool_responses, completion_flag
+    return tool_responses
 
 def _serialise_answers(result: Any) -> str:
     if isinstance(result, str):
